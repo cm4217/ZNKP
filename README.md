@@ -51,16 +51,17 @@ market-dashboard-package/
 
 ## 快速开始
 
-```bash
-# 安装依赖（express + cors）
+**必须先进入项目目录**（不要在用户主目录下直接跑 `npm`，否则会报找不到 `package.json`）：
+
+```powershell
+cd C:\Users\17631\ZNKP
 npm install
-
-# 启动（默认端口 3000，可用环境变量 PORT 覆盖）
 npm start
-
-# 浏览器打开
-# http://localhost:3000/market-dashboard.html
 ```
+
+或双击项目根目录的 `启动.bat`，也可双击用户目录下的 `启动智能看盘.bat`（会自动切到本项目再启动）。
+
+浏览器打开：http://localhost:3000/market-dashboard.html
 
 > 首次访问时后端按需抓取行情并写入缓存；若运行环境无外网，相关接口会走兜底逻辑。
 > `server/accuracy-store.json` 为运行时状态文件（首次运行自动生成），无需手动创建，已被 `.gitignore` 忽略。
