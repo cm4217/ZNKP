@@ -24,31 +24,44 @@ function sma(closes, n) {
 }
 
 function rsi(closes, period = 14) {
+    // Wilder RSI
     if (closes.length < period + 1) return null;
-    let gains = 0, losses = 0;
-    for (let i = closes.length - period; i < closes.length; i++) {
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 1; i <= period; i++) {
         const diff = closes[i] - closes[i - 1];
-        if (diff > 0) gains += diff; else losses -= diff;
+        if (diff > 0) avgGain += diff; else avgLoss -= diff;
     }
-    if (gains + losses === 0) return 50;
-    const rs = (gains / period) / (losses / period);
-    return 100 - 100 / (1 + rs);
+    avgGain /= period; avgLoss /= period;
+    for (let i = period + 1; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        const gain = diff > 0 ? diff : 0;
+        const loss = diff < 0 ? -diff : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    if (avgGain + avgLoss === 0) return 50;
+    if (avgLoss === 0) return 100;
+    return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
 function macd(closes) {
-    if (closes.length < 30) return null;
-    const ema = (data, n) => {
-        const k = 2 / (n + 1);
-        let e = data[0];
-        for (let i = 1; i < data.length; i++) e = data[i] * k + e * (1 - k);
-        return e;
-    };
-    // 用后30根计算，保证近期权重
-    const data = closes.slice(-30);
-    const dif = ema(data, 12) - ema(data, 26);
-    const difPrev = ema(data.slice(0, -1), 12) - ema(data.slice(0, -1), 26);
-    const deaNow = ema(data, 9);
-    return { dif, difPrev, dea: deaNow, hist: dif - deaNow };
+    // 标准 MACD：DIF=EMA12-EMA26，DEA=EMA9(DIF)，hist=DIF-DEA
+    if (closes.length < 35) return null;
+    const k12 = 2 / 13, k26 = 2 / 27, k9 = 2 / 10;
+    let ema12 = closes[0], ema26 = closes[0];
+    const difSeries = [];
+    for (let i = 0; i < closes.length; i++) {
+        if (i > 0) {
+            ema12 = closes[i] * k12 + ema12 * (1 - k12);
+            ema26 = closes[i] * k26 + ema26 * (1 - k26);
+        }
+        difSeries.push(ema12 - ema26);
+    }
+    let dea = difSeries[0];
+    for (let i = 1; i < difSeries.length; i++) dea = difSeries[i] * k9 + dea * (1 - k9);
+    const dif = difSeries[difSeries.length - 1];
+    const difPrev = difSeries[difSeries.length - 2];
+    return { dif, difPrev, dea, hist: dif - dea };
 }
 
 function atrPct(klines, n = 14) {
@@ -186,10 +199,17 @@ function factorVolume(klines) {
 // 因子6：市场宽度（A股涨跌家数，仅A股指数使用）
 function factorBreadth(breadth) {
     if (!breadth) return null;
-    let score = breadth.breadth * 120;
+    let score;
     let detail = `上涨${breadth.up}家/下跌${breadth.down}家`;
-    if (breadth.limitUp > breadth.limitDown * 2) { score += 15; detail += `，涨停${breadth.limitUp}家`; }
-    if (breadth.limitDown > breadth.limitUp * 2) { score -= 15; detail += `，跌停${breadth.limitDown}家`; }
+    if (breadth.breadthZ != null && isFinite(breadth.breadthZ)) {
+        score = Math.max(-80, Math.min(80, breadth.breadthZ * 28));
+        detail += `，宽度z=${breadth.breadthZ.toFixed(2)}`;
+    } else {
+        score = breadth.breadth * 80;
+        detail += '（宽度历史积累中）';
+    }
+    if (breadth.limitUp > breadth.limitDown * 2) { score += 12; detail += `，涨停${breadth.limitUp}家`; }
+    if (breadth.limitDown > breadth.limitUp * 2) { score -= 12; detail += `，跌停${breadth.limitDown}家`; }
     return {
         name: '市场宽度', group: '情绪面',
         score: Math.max(-100, Math.min(100, score)),
@@ -362,17 +382,56 @@ function factorCnh(cnh) {
     };
 }
 
-// 因子18：新闻情绪（标题关键词NLP情感分析；只用真实新闻，过滤模拟数据）
+// 因子18：新闻情绪（标题关键词NLP情感分析；资产过滤 + 时间衰减）
 const NEWS_POS_WORDS = ['上涨', '涨', '升', '新高', '突破', '利好', '增长', '获批', '回购', '增持', '牛市', '反弹', '宽松', '降息', '降准', '减税', '回暖', '盈利', '超预期', '改革', '刺激', '纾困', '企稳', '复苏', '净买入', '流入', '涨停', '封板', '拉升', '冲高', '走高', '大涨', '飙升', '走强', '跟涨', '领涨', '反攻', '抢筹'];
 const NEWS_NEG_WORDS = ['下跌', '跌', '新低', '跌破', '利空', '下滑', '违约', '危机', '风险', '熊市', '暴跌', '亏损', '减持', '收紧', '加息', '贸易战', '制裁', '警告', '担忧', '熔断', '退市', '调查', '处罚', '抛售', '流出', '崩', '跌停', '跳水', '大跌', '下挫', '走低', '回落', '走弱', '杀跌', '重挫', '净卖出', '撤离', '破发'];
 
-function factorNewsSentiment(news) {
+const NEWS_ASSET_KEYWORDS = {
+    index: ['指数', 'A股', '沪指', '深成指', '创业板', '科创', '北向', '两市', '大盘', '港股', '美股', '纳斯达克', '标普'],
+    crypto: ['比特币', 'BTC', '以太', 'ETH', '加密', '数字货币', '币安', 'Crypto'],
+    gold: ['黄金', '金价', '避险', '贵金属', '金饰', 'XAU', 'PAXG'],
+    fund: ['基金', '净值', '公募', 'ETF', '持仓']
+};
+const NEWS_SECTOR_BY_CODE = {
+    '000001.SH': ['上证', '沪指', '大盘'],
+    '000300.SH': ['沪深300', '蓝筹'],
+    '399006.SZ': ['创业板', '成长'],
+    '000688.SH': ['科创'],
+    'HSI': ['恒生', '港股'],
+    'SPX': ['标普', '美股'],
+    'BTC': ['比特币', 'BTC'],
+    'ETH': ['以太', 'ETH']
+};
+
+function newsTimeDecay(n) {
+    const t = n.time || n.create_time || n.createtime || '';
+    let ts = Date.parse(t);
+    if (!isFinite(ts)) {
+        const num = Number(t);
+        if (isFinite(num) && num > 1e9) ts = num < 1e12 ? num * 1000 : num;
+    }
+    if (!isFinite(ts)) return 0.6;
+    const ageH = Math.max(0, (Date.now() - ts) / 3600000);
+    if (ageH <= 6) return 1.5;
+    if (ageH <= 24) return 1.0;
+    if (ageH <= 72) return 0.55;
+    return 0.25;
+}
+
+function filterNewsForAsset(news, type, code) {
+    const real = (news || []).filter(n => n && n.title && n.url && n.url !== '#');
+    if (!real.length) return [];
+    const keys = [].concat(NEWS_ASSET_KEYWORDS[type] || []).concat(NEWS_SECTOR_BY_CODE[code] || []);
+    if (!keys.length) return real;
+    const hit = real.filter(n => keys.some(k => n.title.includes(k)));
+    return hit.length >= 3 ? hit : real;
+}
+
+function factorNewsSentiment(news, type, code) {
     if (!Array.isArray(news)) return null;
-    // 只统计真实新闻（模拟新闻url为'#'）
-    const realNews = news.filter(n => n && n.title && n.url && n.url !== '#');
+    const realNews = filterNewsForAsset(news, type, code);
     if (realNews.length === 0) return null;
 
-    // 否定词检测：关键词前 3 字内出现否定词则翻转情感（"不涨"/"未突破"/"无利好"等）
     const NEG_PREFIX = ['不', '未', '无', '没', '非', '否', '难', '缺乏', '放缓', '回落'];
     function scoreTitle(title) {
         let total = 0;
@@ -392,12 +451,15 @@ function factorNewsSentiment(news) {
         return total;
     }
 
-    let posScore = 0, negScore = 0;
+    let posScore = 0, negScore = 0, used = 0;
     realNews.forEach(n => {
-        const weight = n.impact === 'high' ? 2 : 1;
+        const decay = newsTimeDecay(n);
+        const impact = n.impact === 'high' ? 2 : n.impact === 'medium' ? 1.4 : 1;
         const s = scoreTitle(n.title);
-        if (s > 0) posScore += weight;
-        else if (s < 0) negScore += weight;
+        if (s === 0) return;
+        used++;
+        const w = impact * decay;
+        if (s > 0) posScore += w; else negScore += w;
     });
     const total = posScore + negScore;
     if (total === 0) {
@@ -406,7 +468,7 @@ function factorNewsSentiment(news) {
     const score = Math.round((posScore - negScore) / total * 60);
     return {
         name: '新闻情绪', group: '情绪面', score,
-        detail: `分析${realNews.length}条新闻：利好${posScore}/利空${negScore}，情绪${score > 0 ? '偏多' : score < 0 ? '偏空' : '中性'}`
+        detail: `分析${realNews.length}条(有效${used})：利好${posScore.toFixed(1)}/利空${negScore.toFixed(1)}，情绪${score > 0 ? '偏多' : score < 0 ? '偏空' : '中性'}（已时间衰减）`
     };
 }
 
@@ -424,6 +486,77 @@ function keyLevels(klines) {
     return {
         support: +Math.min(minLow, price).toFixed(2),
         resistance: +Math.max(maxHigh, price).toFixed(2)
+    };
+}
+
+// ========== 分周期复合评分 / 观望 ==========
+const HORIZON_FACTORS = {
+    '1D': ['RSI强弱', 'KDJ随机', '乖离修正', '短期动量', '量能配合', '主力资金', '北向资金', '新闻情绪', '市场宽度'],
+    '1W': ['MACD动能', '短期动量', '均线趋势', '市场宽度', '恐慌贪婪指数', 'A50期货', '两融杠杆', '主力资金'],
+    '1M': ['均线趋势', '布林带位置', 'VIX波动率', '美元指数', '人民币汇率', '恐慌贪婪指数']
+};
+
+function computeHorizonScores(factors, W, learnedMult) {
+    const byName = {};
+    (factors || []).forEach(f => { if (f && f.name) byName[f.name] = f; });
+    const out = {};
+    ['1D', '1W', '1M'].forEach(h => {
+        let ws = 0, ww = 0;
+        HORIZON_FACTORS[h].forEach(name => {
+            const f = byName[name];
+            if (!f || f.active === false) return;
+            if (!Object.prototype.hasOwnProperty.call(W, name)) return;
+            let w = W[name];
+            if (learnedMult && learnedMult[name] != null) w *= learnedMult[name];
+            ws += f.score * w;
+            ww += w;
+        });
+        out[h] = ww > 0 ? ws / ww : 0;
+    });
+    return out;
+}
+
+function mapHorizonScoresToPredictions(horizonScores, vol) {
+    const scale = { '1D': 0.9, '1W': Math.sqrt(5) * 1.1, '1M': Math.sqrt(22) * 1.2 };
+    const cap = { '1D': 3, '1W': 8, '1M': 15 };
+    const out = {};
+    ['1D', '1W', '1M'].forEach(h => {
+        const sComp = Math.tanh((horizonScores[h] || 0) / 100);
+        const v = Math.max(-cap[h], Math.min(cap[h], sComp * vol * scale[h] * 100));
+        out[h] = +v.toFixed(2);
+    });
+    return out;
+}
+
+function applyAbstain(score, predictions, confidence, ensembleStability) {
+    const disagree = ensembleStability && ensembleStability.disagree != null ? ensembleStability.disagree : 0;
+    const edge = Math.abs(score);
+    const predEdge = Math.max(Math.abs(predictions['1D'] || 0), Math.abs(predictions['1W'] || 0) * 0.4);
+    let abstain = false;
+    let reason = '';
+    if (edge < 10 || predEdge < 0.12) { abstain = true; reason = '边际不足'; }
+    else if (disagree >= 2) { abstain = true; reason = '双模型高分歧'; }
+    else if (disagree >= 1 && edge < 18) { abstain = true; reason = '分歧+弱信号'; }
+    if (!abstain) {
+        return {
+            predictions, confidence,
+            direction: score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock',
+            directionText: score > 15 ? '看涨' : score < -15 ? '看跌' : '震荡',
+            abstain: false
+        };
+    }
+    const shrink = disagree >= 2 ? 0.15 : 0.35;
+    return {
+        predictions: {
+            '1D': +(predictions['1D'] * shrink).toFixed(2),
+            '1W': +(predictions['1W'] * shrink).toFixed(2),
+            '1M': +(predictions['1M'] * shrink).toFixed(2)
+        },
+        confidence: Math.max(35, Math.round(confidence * 0.7)),
+        direction: 'shock',
+        directionText: '观望',
+        abstain: true,
+        abstainReason: reason
     };
 }
 
@@ -509,15 +642,20 @@ async function predict(code, type = 'index', opts = {}) {
         } catch (e) { /* 降级 */ }
         return false;
     };
+    // 实盘预测优先拉 ≥120–250 根真日线
     if (type === 'crypto') {
-        await tryKline(() => ds.getCryptoKline(code, '1d', 90));
+        if (!await tryKline(() => ds.getCryptoKline(code, '1d', 250))) {
+            await tryKline(() => ds.getCryptoKline(code, '1d', 120));
+        }
     } else if (type === 'gold') {
-        if (!await tryKline(() => ds.getGoldKline('1M'))) {
-            await tryKline(() => ds.getGoldKline('1Y'));
+        if (!await tryKline(() => ds.getGoldKline('1Y'), 'PAXG日线')) {
+            await tryKline(() => ds.getGoldKline('3M'), 'PAXG日线3M');
         }
     } else {
-        if (!await tryKline(() => ds.getIndexKline(code, '1M'))) {
-            await tryKline(() => ds.getIndexKline(code, '1Y'), 'tencent(周线)');
+        if (!await tryKline(() => ds.getIndexKline(code, '1Y'), '日线1Y')) {
+            if (!await tryKline(() => ds.getIndexKline(code, '3M'), '日线3M')) {
+                await tryKline(() => ds.getIndexKline(code, '1M'), '日线1M');
+            }
         }
     }
     const isEstimatedKline = klineSources.some(s => /estimated|估算/.test(s));
@@ -559,8 +697,9 @@ async function predict(code, type = 'index', opts = {}) {
     ]);
     const news = (marketNews && marketNews.length > 0) ? marketNews : rollNews;
 
-    // 4. 因子计算（估算K线是随机模拟，技术因子无意义则跳过）
+    // 4. 因子计算（不塞占位「技术因子」稀释权重）
     const factors = [];
+    let techMissing = false;
     if (klines.length >= 20 && !isEstimatedKline) {
         factors.push(factorTrend(klines));
         factors.push(factorMomentum(klines));
@@ -570,13 +709,12 @@ async function predict(code, type = 'index', opts = {}) {
         factors.push(factorBollinger(klines));
         factors.push(factorKdj(klines));
     } else {
-        factors.push({ name: '技术因子', group: '技术面', score: 0, detail: isEstimatedKline ? '暂无真实K线，技术面不评分' : 'K线数据不足，技术面暂不评分' });
+        techMissing = true;
     }
     const fb = factorBreadth(breadth); if (fb) factors.push(fb);
-    const fnb = factorNorthBound(northBound); if (fnb) factors.push(fnb);
-    // 北向资金接口返回但当日未更新（收盘后/停市）时给出说明，保证资金面维度可见
-    if (northBound && !northBound.active && isChinaRelated) {
-        factors.push({ name: '北向资金', group: '资金面', score: 0, detail: '北向资金当日数据未更新，暂不计分' });
+    const fnb = factorNorthBound(northbound); if (fnb) factors.push(fnb);
+    if (northbound && !northbound.active && isChinaRelated) {
+        factors.push({ name: '北向资金', group: '资金面', score: 0, detail: '北向资金当日数据未更新，暂不计分', active: false });
     }
     const ffg = factorFearGreed(fearGreed); if (ffg) factors.push(ffg);
     const fmr = factorMeanReversion(quote); if (fmr) factors.push(fmr);
@@ -586,9 +724,9 @@ async function predict(code, type = 'index', opts = {}) {
     const fvix = factorVix(vix, type); if (fvix) factors.push(fvix);
     const fdxy = factorDollar(dxy, type); if (fdxy) factors.push(fdxy);
     const fcnh = factorCnh(cnh); if (fcnh) factors.push(fcnh);
-    const fnews = factorNewsSentiment(news); if (fnews) factors.push(fnews);
+    const fnews = factorNewsSentiment(news, type, code); if (fnews) factors.push(fnews);
 
-    // 4.5 数据质量：识别因数据源不可用而整组缺失的因子（海外沙箱东财被墙时，A股资金面整组失效）
+// 4.5 数据质量：识别因数据源不可用而整组缺失的因子（海外沙箱东财被墙时，A股资金面整组失效）
     const hasCapital = !!(fnb || fmargin || fflow);
     const hasBreadth = !!fb;
     const hasSentiment = !!ffg;
@@ -598,43 +736,49 @@ async function predict(code, type = 'index', opts = {}) {
         if (!hasBreadth) missingGroups.push('市场宽度(涨跌家数)');
     }
     if ((type === 'crypto' || type === 'gold') && !hasSentiment) missingGroups.push('情绪面(恐慌贪婪)');
+    if (techMissing) missingGroups.push('技术面(真实日K不足)');
 
-    // 5. 加权综合（缺失因子自动权重归一化）
+    // 5. 加权：仅权重表有名且 active!==false
+    const learnedMult = (typeof accuracy.getLearnedWeightMultipliers === 'function')
+        ? accuracy.getLearnedWeightMultipliers(type) : null;
     let weightedSum = 0;
     let weightSum = 0;
     factors.forEach(f => {
-        const w = W[f.name] || 0.05;
+        if (!f || f.active === false) return;
+        if (!Object.prototype.hasOwnProperty.call(W, f.name)) return;
+        let w = W[f.name];
+        if (learnedMult && learnedMult[f.name] != null) w *= learnedMult[f.name];
         weightedSum += f.score * w;
         weightSum += w;
     });
     const score = weightSum > 0 ? Math.round(weightedSum / weightSum) : 0;
 
     // 6. 方向与置信度
-    const direction = score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock';
-    const directionText = direction === 'bullish' ? '看涨' : direction === 'bearish' ? '看跌' : '震荡';
-    // 置信度 = 因子方向一致度(0-60) + 数据维度完整度(0-40)
-    const signedFactors = factors.filter(f => Math.abs(f.score) > 1);
+    let direction = score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock';
+    let directionText = direction === 'bullish' ? '看涨' : direction === 'bearish' ? '看跌' : '震荡';
+    const signedFactors = factors.filter(f => f && f.active !== false && Object.prototype.hasOwnProperty.call(W, f.name) && Math.abs(f.score) > 1);
     let agree = 0;
-    signedFactors.forEach(f => { if (Math.sign(f.score) === Math.sign(score)) agree += W[f.name] || 0.05; });
-    const totalWeight = signedFactors.reduce((s, f) => s + (W[f.name] || 0.05), 0);
+    signedFactors.forEach(f => {
+        let w = W[f.name];
+        if (learnedMult && learnedMult[f.name] != null) w *= learnedMult[f.name];
+        if (score === 0 || Math.sign(f.score) === Math.sign(score)) agree += w;
+    });
+    const totalWeight = signedFactors.reduce((s, f) => {
+        let w = W[f.name];
+        if (learnedMult && learnedMult[f.name] != null) w *= learnedMult[f.name];
+        return s + w;
+    }, 0);
     const consistency = totalWeight > 0 ? agree / totalWeight : 0.5;
-    // 数据维度完整度：K线/宽度/北向/恐慌贪婪/行情 + 新增（A50/两融/主力/VIX/美元/人民币/新闻）
-    const dims = (klines.length >= 25 ? 1 : 0) + (breadth ? 1 : 0) + (northBound && northBound.active ? 1 : 0) + (fearGreed ? 1 : 0) + (quote ? 1 : 0)
+    const dims = (klines.length >= 60 ? 1 : 0) + (breadth ? 1 : 0) + (northbound && northbound.active ? 1 : 0) + (fearGreed ? 1 : 0) + (quote ? 1 : 0)
         + (a50 ? 1 : 0) + (margin ? 1 : 0) + (flow ? 1 : 0) + (vix ? 1 : 0) + (dxy ? 1 : 0) + (cnh ? 1 : 0) + (fnews ? 1 : 0);
-    const confidence = Math.round(Math.min(92, 40 + consistency * 45 + Math.min(28, dims * 3)));
+    let confidence = Math.round(Math.min(92, 40 + consistency * 45 + Math.min(28, dims * 3)));
+    if (techMissing) confidence = Math.max(30, confidence - 18);
     const dataQuality = { missing: missingGroups, note: missingGroups.length ? '部分因子因数据源不可用而缺失，预测置信度已相应下调' : '因子数据完整' };
 
-    // 7. 分周期预测涨跌幅（基于评分×波动率；评分经 tanh 压缩，避免极端值线性放大给出生硬大涨大跌）
+    // 7. 分周期：短/中/长复合评分
     const vol = Math.max(0.006, Math.min(0.09, atrPct(klines, 14)));
-    const sComp = Math.tanh(score / 100);
-    const raw1D = sComp * vol * 0.9 * 100;
-    const raw1W = sComp * vol * Math.sqrt(5) * 1.1 * 100;
-    const raw1M = sComp * vol * Math.sqrt(22) * 1.2 * 100;
-    let predictions = {
-        '1D': +clampPct(raw1D, 3).toFixed(2),
-        '1W': +clampPct(raw1W, 8).toFixed(2),
-        '1M': +clampPct(raw1M, 15).toFixed(2)
-    };
+    const horizonScores = computeHorizonScores(factors, W, learnedMult);
+    let predictions = mapHorizonScoresToPredictions(horizonScores, vol);
 
     // 7.4 集成增强（六层框架）：堆叠第二基模型(统计回归) + 自适应权重融合 + SHAP 归因 + 置信度校准
     const ensembleResult = ensemble.assemble({
@@ -645,14 +789,19 @@ async function predict(code, type = 'index', opts = {}) {
     factors.push(ensembleResult.regime);
     predictions = ensembleResult.finalRaw;
 
+    const rawPredictions = { '1D': predictions['1D'], '1W': predictions['1W'], '1M': predictions['1M'] };
+    const factorSigns = factors.filter(f => f && f.active !== false && Object.prototype.hasOwnProperty.call(W, f.name) && Math.abs(f.score) > 5)
+        .map(f => ({ name: f.name, sign: Math.sign(f.score) || 0 }));
+
     // 7.5 昨日对比 + 累计数据校正（仅真实K线参与结算，估算K线无结算意义）
     let accResult = null;
     let finalConfidence = confidence;
     if (klines.length >= 2 && !isEstimatedKline && !opts.noCalibrate) {
         accResult = accuracy.process({
             key: `${type}|${code}`,
-            klines: klines.slice(-90),
-            predictions, confidence, score, direction
+            klines: klines.slice(-120),
+            predictions, confidence, score, direction,
+            rawPredictions, techOnly: false, factorSigns
         });
         if (accResult) {
             predictions['1D'] = +clampPct(accResult.predictions['1D'], 3).toFixed(2);
@@ -668,6 +817,13 @@ async function predict(code, type = 'index', opts = {}) {
         const disc = ensembleResult.stability.confidenceAfterHedge / confidence;
         if (isFinite(disc) && disc > 0) finalConfidence = Math.round(finalConfidence * disc);
     }
+
+    // 7.55 低边际观望
+    const abstained = applyAbstain(score, predictions, finalConfidence, ensembleResult.stability);
+    predictions = abstained.predictions;
+    finalConfidence = abstained.confidence;
+    direction = abstained.direction;
+    directionText = abstained.directionText;
 
     // 7.6 预测区间（±1σ，基于波动率按周期缩放）
     const intervals = buildIntervals(predictions, vol);
@@ -732,8 +888,11 @@ async function predict(code, type = 'index', opts = {}) {
         price: lastPrice,
         changePercent: quote && quote.changePercent != null ? +quote.changePercent.toFixed(2) : null,
         score, direction, directionText,
+        abstain: !!abstained.abstain,
+        abstainReason: abstained.abstainReason || null,
         confidence: finalConfidence,
         predictions,
+        rawPredictions,
         intervals,
         dataQuality,
         yesterday: accResult ? accResult.yesterday : null,
@@ -778,17 +937,20 @@ function clampPct(v, max) {
 function computeTechPred(klines, type) {
     const W = getWeights(type);
     if (!Array.isArray(klines) || klines.length < 20) {
-        return { predictions: { '1D': 0, '1W': 0, '1M': 0 }, score: 0, direction: 'shock', confidence: 50, vol: 0.01 };
+        return { predictions: { '1D': 0, '1W': 0, '1M': 0 }, score: 0, direction: 'shock', confidence: 50, vol: 0.01, factorSigns: [], techOnly: true };
     }
     const factors = [
         factorTrend(klines), factorMomentum(klines), factorRsi(klines), factorMacd(klines),
         factorVolume(klines), factorBollinger(klines), factorKdj(klines)
     ];
     let weightedSum = 0, weightSum = 0;
-    factors.forEach(f => { const w = W[f.name] || 0.05; weightedSum += f.score * w; weightSum += w; });
+    factors.forEach(f => {
+        if (!Object.prototype.hasOwnProperty.call(W, f.name)) return;
+        const w = W[f.name];
+        weightedSum += f.score * w; weightSum += w;
+    });
     const score = weightSum > 0 ? Math.round(weightedSum / weightSum) : 0;
 
-    // 波动率：优先用真实高低价 ATR；仅有收盘价（基金净值）时用日收益率标准差
     let vol;
     const last = klines[klines.length - 1];
     if (last.high == null || last.low == null) {
@@ -801,17 +963,12 @@ function computeTechPred(klines, type) {
         vol = Math.max(0.006, Math.min(0.09, atrPct(klines, 14)));
     }
 
-    const sComp = Math.tanh(score / 100);
-    const raw1D = sComp * vol * 0.9 * 100;
-    const raw1W = sComp * vol * Math.sqrt(5) * 1.1 * 100;
-    const raw1M = sComp * vol * Math.sqrt(22) * 1.2 * 100;
-    const predictions = {
-        '1D': +clampPct(raw1D, 3).toFixed(2),
-        '1W': +clampPct(raw1W, 8).toFixed(2),
-        '1M': +clampPct(raw1M, 15).toFixed(2)
-    };
+    const horizonScores = computeHorizonScores(factors, W, null);
+    const predictions = mapHorizonScoresToPredictions(horizonScores, vol);
     const direction = score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock';
-    return { predictions, score, direction, confidence: 70, vol };
+    const factorSigns = factors.filter(f => Object.prototype.hasOwnProperty.call(W, f.name) && Math.abs(f.score) > 5)
+        .map(f => ({ name: f.name, sign: Math.sign(f.score) || 0 }));
+    return { predictions, score, direction, confidence: 70, vol, factorSigns, techOnly: true };
 }
 
 // ========== 基金预测：净值技术面 + 基准指数多因子融合 ==========
@@ -950,7 +1107,9 @@ async function predictFund(code, fundType) {
     let weightedSum = 0;
     let weightSum = 0;
     factors.forEach(f => {
-        const w = (W[f.name] || 0.05) * blends.nav * 2;
+        if (!f || f.active === false) return;
+        if (!Object.prototype.hasOwnProperty.call(W, f.name)) return;
+        const w = W[f.name] * blends.nav * 2;
         weightedSum += f.score * w;
         weightSum += w;
     });
@@ -962,8 +1121,8 @@ async function predictFund(code, fundType) {
     const score = weightSum > 0 ? Math.round(weightedSum / weightSum) : 0;
 
     // 7. 方向/置信度：基金自身维度 + 基准维度一致度 + 持仓/经理覆盖度
-    const direction = score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock';
-    const directionText = direction === 'bullish' ? '看涨' : direction === 'bearish' ? '看跌' : '震荡';
+    let direction = score > 15 ? 'bullish' : score < -15 ? 'bearish' : 'shock';
+    let directionText = direction === 'bullish' ? '看涨' : direction === 'bearish' ? '看跌' : '震荡';
     const navScore = (() => {
         let s = 0, w = 0;
         factors.forEach(f => { const fw = W[f.name] || 0.05; s += f.score * fw; w += fw; });
@@ -996,6 +1155,9 @@ async function predictFund(code, fundType) {
     });
     factors.push(ensembleResult.regime);
     predictions = ensembleResult.finalRaw;
+    const fundRawPredictions = { '1D': predictions['1D'], '1W': predictions['1W'], '1M': predictions['1M'] };
+    const fundFactorSigns = factors.filter(f => f && Object.prototype.hasOwnProperty.call(W, f.name) && Math.abs(f.score) > 5)
+        .map(f => ({ name: f.name, sign: Math.sign(f.score) || 0 }));
 
     // 昨日对比 + 累计数据校正（按净值序列结算：新净值出现时结算上一条预测）
     let accResult = null;
@@ -1003,8 +1165,9 @@ async function predictFund(code, fundType) {
     if (fundInfo.bars && fundInfo.bars.length >= 2) {
         accResult = accuracy.process({
             key: `fund|${code}`,
-            klines: fundInfo.bars.slice(-90),
-            predictions, confidence, score, direction
+            klines: fundInfo.bars.slice(-120),
+            predictions, confidence, score, direction,
+            rawPredictions: fundRawPredictions, techOnly: false, factorSigns: fundFactorSigns
         });
         if (accResult) {
             predictions['1D'] = +clampPct(accResult.predictions['1D'], 2).toFixed(2);
@@ -1018,6 +1181,12 @@ async function predictFund(code, fundType) {
         const disc = ensembleResult.stability.confidenceAfterHedge / confidence;
         if (isFinite(disc) && disc > 0) finalConfidence = Math.round(finalConfidence * disc);
     }
+
+    const abstained = applyAbstain(score, predictions, finalConfidence, ensembleResult.stability);
+    predictions = abstained.predictions;
+    finalConfidence = abstained.confidence;
+    direction = abstained.direction;
+    directionText = abstained.directionText;
 
     // 预测区间（±1σ，基于基金自身波动率）
     const intervals = buildIntervals(predictions, vol);
@@ -1063,8 +1232,11 @@ async function predictFund(code, fundType) {
         navDate: fundInfo.navDate,
         benchmark,
         score, direction, directionText,
+        abstain: !!abstained.abstain,
+        abstainReason: abstained.abstainReason || null,
         confidence: finalConfidence,
         predictions,
+        rawPredictions: fundRawPredictions,
         intervals,
         dataQuality,
         intradayEstimate,

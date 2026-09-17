@@ -92,3 +92,13 @@ pm2 save && pm2 startup
 - **页面打开是模拟数据（灰色状态）**：后端没起来，看平台日志；确认 Start Command 在 `market-dashboard` 根目录下执行的是 `node server/server.js`
 - **限流 429**：单 IP 每分钟 300 次 API 请求上限（多标签页轮询可能触发），正常单页使用不会遇到
 - **想改端口**：设环境变量 `PORT`（平台一般自动注入，无需手动设置）
+
+---
+
+## 准确度库 / MODEL_VERSION（运维注意）
+
+- 当前 `MODEL_VERSION = 3`（`server/accuracy.js`）。因子权重、MACD、日线回填、raw/adj 分离等变更后旧样本不兼容。
+- 启动时若 `accuracy-store.json` 的 `schema`/`version` 不匹配，会**自动清空**并由 `backfill.ensureBackfilled()` 用真日线重建。
+- Docker/自建部署：若挂载了旧的 `accuracy-store.json`，升级后首次启动会重建（需可访问腾讯/币安等上游）；也可手动删除该文件后重启。
+- 回填强制日线间距校验（拒绝周线），结算 OFFSETS 仍为 1D=1 / 1W=5 / 1M=22 个交易日。
+

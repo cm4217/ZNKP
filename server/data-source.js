@@ -490,12 +490,13 @@ function getTencentKline(code, period = '1M') {
     if (!tencentCode) return Promise.reject(new Error('K-line not available for this index'));
 
     // 腾讯K线周期映射
+    // 1Y/3M 一律用日线（技术因子/校准结算按交易日 OFFSETS=1/5/22，周线不可用）
     const periodMap = {
         '1D': { ktype: 'day', count: 1 },
         '1W': { ktype: 'day', count: 5 },
         '1M': { ktype: 'day', count: 30 },
-        '3M': { ktype: 'week', count: 12 },
-        '1Y': { ktype: 'week', count: 52 }
+        '3M': { ktype: 'day', count: 90 },
+        '1Y': { ktype: 'day', count: 250 }
     };
     const p = periodMap[period] || periodMap['1M'];
 
@@ -940,12 +941,13 @@ async function getGoldPrice() {
 }
 
 async function getGoldKline(period = '1M') {
+    // 黄金预测/回填需要真实日 K：1Y/3M 用 PAXG 日线（勿用周线×52）
     const intervalMap = {
         '1D': { interval: '1h', count: 24 },
         '1W': { interval: '1d', count: 7 },
         '1M': { interval: '1d', count: 30 },
-        '3M': { interval: '1w', count: 12 },
-        '1Y': { interval: '1w', count: 52 }
+        '3M': { interval: '1d', count: 90 },
+        '1Y': { interval: '1d', count: 250 }
     };
     const p = intervalMap[period] || intervalMap['1M'];
 
@@ -988,6 +990,22 @@ function generateSimpleKline(basePrice, count) {
 
 // ========== 市场情绪与资金数据（AI预测因子） ==========
 
+// 市场宽度滚动历史（进程内），用于 z-score 而非原始水平打分
+const BREADTH_HIST_MAX = 60;
+const breadthHistory = [];
+function pushBreadthHistory(raw) {
+    if (!isFinite(raw)) return null;
+    breadthHistory.push(raw);
+    while (breadthHistory.length > BREADTH_HIST_MAX) breadthHistory.shift();
+    if (breadthHistory.length < 8) return null;
+    const n = breadthHistory.length;
+    const mean = breadthHistory.reduce((a, b) => a + b, 0) / n;
+    const variance = breadthHistory.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+    const sd = Math.sqrt(variance);
+    if (!(sd > 1e-6)) return 0;
+    return (raw - mean) / sd;
+}
+
 // A股涨跌家数分布（东方财富 getTopicZDFenBu，全部失败返回null由预测引擎降级）
 async function getMarketBreadth() {
     if (!breakerAllow('em-breadth')) return null;
@@ -1015,10 +1033,13 @@ async function getMarketBreadth() {
         const total = up + down + flat;
         if (total < 100) throw new Error('breadth sample too small');
         breakerOk('em-breadth');
+        const rawBreadth = (up - down) / total;   // 市场宽度 -1~1
+        const z = pushBreadthHistory(rawBreadth);
         return {
             up, down, flat, limitUp, limitDown, total,
             upRatio: up / total,
-            breadth: (up - down) / total,   // 市场宽度 -1~1
+            breadth: rawBreadth,
+            breadthZ: z,                       // 相对自身历史的 z-score（样本不足时为 null）
             date: data.data.qdate
         };
     } catch (e) {

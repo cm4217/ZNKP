@@ -156,10 +156,12 @@ function clampByVol(raw, klines) {
 // 对因子 f：贡献 = w_f * score_f；按 |贡献| 归一化为占比，输出排序后的瀑布数组
 function attribution(factors, W) {
     if (!Array.isArray(factors)) return [];
-    const items = factors.filter(f => f && typeof f.score === 'number');
+    // 仅对权重表中有名、且 active!==false 的因子归因（避免占位因子）
+    const items = factors.filter(f => f && typeof f.score === 'number' && f.active !== false
+        && W && Object.prototype.hasOwnProperty.call(W, f.name));
     let total = 0;
     const contribs = items.map(f => {
-        const w = (W && W[f.name]) || 0.05;
+        const w = W[f.name];
         const c = w * f.score;
         total += Math.abs(c);
         return { name: f.name, group: f.group, score: Math.round(f.score), weight: +w.toFixed(3), contribution: +c.toFixed(2) };

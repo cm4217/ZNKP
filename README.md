@@ -11,6 +11,13 @@
 - **K 线与热力图**：基于 ECharts 可视化，多周期切换（1日 / 1周 / 1月 / 3月 / 1年）。
 - **响应式布局**：手机 / 平板 / 桌面全适配。
 
+
+## 预测准确度（校准）
+
+- 在线预测会把 **raw（校准前）** 与 **adj（展示校正后）** 一并落盘；命中率/偏差统计与集成权重学习只用 raw。
+- `MODEL_VERSION` 升级后 `server/accuracy-store.json` 会自动重建（见 `DEPLOY.md`）；回填只用真日线。
+- 低边际或双模型高分歧时 API 返回 `directionText: 观望` / `abstain: true`。
+
 ## 技术栈
 
 - 后端：Node.js + Express（行情代理 + AI 预测 API）

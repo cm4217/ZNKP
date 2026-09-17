@@ -1377,8 +1377,17 @@
         var score = aiPrediction.score;
         document.getElementById('aiScore').textContent = (score > 0 ? '+' : '') + score;
         document.getElementById('aiScore').className = 'ai-meta-value ' + (score > 15 ? 'up' : score < -15 ? 'down' : 'flat');
-        document.getElementById('aiDirection').textContent = aiPrediction.directionText;
-        document.getElementById('aiDirection').className = 'ai-meta-value ' + (aiPrediction.direction === 'bullish' ? 'up' : aiPrediction.direction === 'bearish' ? 'down' : 'flat');
+        // 观望：低边际/高分歧时后端 directionText='观望'，前端醒目标注
+        var dirText = aiPrediction.directionText || '--';
+        if (aiPrediction.abstain) {
+            dirText = '观望' + (aiPrediction.abstainReason ? '（' + aiPrediction.abstainReason + '）' : '');
+        }
+        document.getElementById('aiDirection').textContent = dirText;
+        document.getElementById('aiDirection').className = 'ai-meta-value ' + (
+            aiPrediction.abstain ? 'flat' :
+            aiPrediction.direction === 'bullish' ? 'up' :
+            aiPrediction.direction === 'bearish' ? 'down' : 'flat'
+        );
 
         var supportEl = document.getElementById('aiSupport');
         var resEl = document.getElementById('aiResistance');

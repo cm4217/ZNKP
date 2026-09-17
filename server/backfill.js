@@ -1,19 +1,14 @@
 // 历史 K 线回填校准样本
 // -----------------------------------------------------------------------------
-// 思路：线上 predict() 每次预测会调用 accuracy.process() 落盘快照，并在下一根真实
-// K 线出现后回溯结算实际涨跌，积累 bias / 幅度比 / 方向命中率 用于自我校正。
-// 但冷启动时校准库为空，校正长期不生效。本模块用各品种「真实历史日 K 线」回放模型
-// 的技术面核心（computeTechPred，与线上技术因子同源），为每一天生成一个历史预测，
-// 再由 settle() 用后续真实涨跌回填实际值，从而把校准样本一次性灌满。
+// 用各品种「真实历史日 K 线」回放模型的技术面核心（computeTechPred），
+// 为每一天生成历史预测，再由 settle() 用后续真实涨跌回填。
 //
-// 说明：回填预测仅含技术面核心（实时资金/情绪/新闻等无法取得历史值，留空），
-// 与线上多因子预测存在轻微差异；但偏差/幅度/命中率的统计对技术核心高度一致，
-// 足以驱动有效的分周期校正。校准会在线上持续被新样本滚动更新。
+// v3：强制真日线（拒绝周线）；techOnly 标记写入 accuracy，与线上多因子残差分流；
+// MODEL_VERSION 变更后 ensureBackfilled 会因样本清空而自动重建。
 const ds = require('./data-source');
 const accuracy = require('./accuracy');
 const predict = require('./predict');
 
-// 回测标的（key 规则与 predict() 一致： index|CODE / crypto|SYM / gold|PAXG / fund|CODE）
 const TARGETS = [
     { code: '000001.SH', type: 'index' },
     { code: '000300.SH', type: 'index' },
@@ -28,19 +23,42 @@ const TARGETS = [
     { code: '110011', type: 'fund' }
 ];
 
-const MIN_LOOKBACK = 60;   // 技术因子至少需要约 60 根才有意义
-const TAIL_UNSETTLED = 23; // 末尾 23 根（≈1月）保留给线上/未来结算，不回填
+const MIN_LOOKBACK = 60;
+const TAIL_UNSETTLED = 23;
 
-// 将 K 线统一规整为 {date, close}；加密/黄金用 openTime 时间戳推导日期
 function normDateOf(k) {
     if (k.date != null && k.date !== '') return String(k.date).substring(0, 10);
     if (k.openTime != null) return new Date(Number(k.openTime)).toISOString().substring(0, 10);
     return '';
 }
 
+// 断言近似日频：中位间隔应在 0.5–3 天（拒周线/月线）
+function assertDailyBars(bars, label) {
+    if (!bars || bars.length < 10) return { ok: false, reason: 'too few bars' };
+    const gaps = [];
+    for (let i = 1; i < bars.length; i++) {
+        const t0 = Date.parse(bars[i - 1].date);
+        const t1 = Date.parse(bars[i].date);
+        if (!isFinite(t0) || !isFinite(t1)) continue;
+        gaps.push((t1 - t0) / 86400000);
+    }
+    if (gaps.length < 5) return { ok: false, reason: 'cannot measure spacing' };
+    gaps.sort((a, b) => a - b);
+    const median = gaps[Math.floor(gaps.length / 2)];
+    // 周线中位≈7，日线（含周末）中位≈1–1.5
+    if (median > 3.5) {
+        return { ok: false, reason: `${label} bar spacing median=${median.toFixed(1)}d (weekly/monthly refused for OFFSETS 1/5/22)` };
+    }
+    if (median < 0.2) {
+        return { ok: false, reason: `${label} bar spacing too fine (intraday?)` };
+    }
+    return { ok: true, median };
+}
+
 async function fetchHistorical(code, type) {
     if (type === 'index') {
-        const r = await ds.getIndexKline(code, '1Y');   // ~250 根日线
+        // 必须真日线：data-source 1Y 现已映射 day×250
+        const r = await ds.getIndexKline(code, '1Y');
         return r && r.data ? r.data : null;
     }
     if (type === 'crypto') {
@@ -48,7 +66,7 @@ async function fetchHistorical(code, type) {
         return r && r.data ? r.data : null;
     }
     if (type === 'gold') {
-        // getGoldKline('1Y') 仅返回 52 根周线，不足以回测；改用 PAXG 日线（Binance 源）取约 365 根日 K 线
+        // PAXG 日线（Binance），禁止周线
         const r = await ds.getCryptoKline('PAXG', '1d', 365);
         return r && r.data ? r.data : null;
     }
@@ -73,25 +91,33 @@ async function backfillCode(target) {
         return { code, type, ok: false, reason: 'insufficient bars (' + (klines ? klines.length : 0) + ')' };
     }
 
-    // 用于结算/落盘的规整序列（带日期）
     const bars = klines.map(k => ({ date: normDateOf(k), close: k.close })).filter(b => b.date && b.close > 0);
     if (bars.length < MIN_LOOKBACK + TAIL_UNSETTLED + 1) {
         return { code, type, ok: false, reason: 'valid bars too few (' + bars.length + ')' };
     }
 
+    const spacing = assertDailyBars(bars, key);
+    if (!spacing.ok) {
+        return { code, type, ok: false, reason: spacing.reason };
+    }
+
     let count = 0;
     const end = bars.length - 1 - TAIL_UNSETTLED;
     for (let i = MIN_LOOKBACK; i <= end; i++) {
-        const slice = klines.slice(0, i + 1);            // 技术因子只看"当时"可得的 K 线
+        const slice = klines.slice(0, i + 1);
         const p = predict.computeTechPred(slice, type);
-        accuracy.record(key, bars[i].date, bars[i].close, p.predictions, { score: p.score, direction: p.direction });
+        accuracy.record(key, bars[i].date, bars[i].close, p.predictions, {
+            score: p.score,
+            direction: p.direction,
+            techOnly: true,
+            factorSigns: p.factorSigns || []
+        });
         count++;
-        if (count % 25 === 0) await new Promise(r => setImmediate(r)); // 让出事件循环，避免阻塞
+        if (count % 25 === 0) await new Promise(r => setImmediate(r));
     }
-    // 用完整序列回填实际涨跌（未来 bar 已在序列内）
     accuracy.settle(key, bars);
-    const st = accuracy.stats(key);
-    return { code, type, ok: true, recorded: count, stats: st };
+    const st = accuracy.stats(key, { mode: 'tech' });
+    return { code, type, ok: true, recorded: count, medianGap: spacing.median, stats: st };
 }
 
 async function backfillAll() {
@@ -107,11 +133,11 @@ async function backfillAll() {
     return results;
 }
 
-// 启动自愈：仅在校准库样本不足时执行一次（避免每次重启都重抓上游）
 let backfilling = false;
 let backfilled = false;
 async function ensureBackfilled() {
     if (backfilled || backfilling) return null;
+    // MODEL_VERSION/schema 变更后 records 会被清空，totalEntries 变小 → 自动重建
     if (accuracy.totalEntries() > 150) { backfilled = true; return null; }
     backfilling = true;
     try {
@@ -123,4 +149,4 @@ async function ensureBackfilled() {
     }
 }
 
-module.exports = { backfillAll, backfillCode, ensureBackfilled, TARGETS };
+module.exports = { backfillAll, backfillCode, ensureBackfilled, TARGETS, assertDailyBars };
