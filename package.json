@@ -1,0 +1,13 @@
+{
+  "name": "market-dashboard-package",
+  "version": "1.0.0",
+  "private": true,
+  "description": "智投看盘 - 市场仪表盘（指数/加密/黄金/基金 + AI多因子预测）",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}

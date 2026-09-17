@@ -1,0 +1,7 @@
+server/node_modules
+server/server.log
+server/server.err.log
+server/accuracy-store.json
+node_modules
+.git
+*.log

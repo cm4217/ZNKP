@@ -1,0 +1,14 @@
+{
+  "name": "market-dashboard-server",
+  "version": "1.0.0",
+  "description": "智投看盘 - 后端数据代理服务",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}

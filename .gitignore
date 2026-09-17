@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Runtime state & logs
+*.log
+server/server.log
+server/server.err.log
+server/accuracy-store.json
+
+# Environment
+.env
+.env.*
+*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Misc
+npm-debug.log*
