@@ -122,13 +122,20 @@ function settle(key, bars) {
     return lastNew;
 }
 
-// 丢弃7天以上仍无法结算的陈旧记录（期间停市/无新K线）
+// 丢弃长期无法推进结算的陈旧记录。
+// 注意：1M 需要约 22 个交易日（≈30–45 个自然日）才能结算；
+// 旧实现用「7 天且要求 1D+1W+1M 全齐」会把等待 1M 的样本提前删掉，导致中长期校准永远为空。
 function prune(key, arr, s) {
     const now = Date.now();
-    const kept = arr.filter(e =>
-        (e.actual1D != null && e.actual1W != null && e.actual1M != null) ||
-        now - (e.ts || 0) < 7 * 86400e3
-    );
+    const kept = arr.filter(e => {
+        const fully = e.actual1D != null && e.actual1W != null && e.actual1M != null;
+        if (fully) return true;
+        const age = now - (e.ts || 0);
+        // 连 1D 都结算不了（停市/无新K线/日期对不上）→ 10 天后丢弃
+        if (e.actual1D == null) return age < 10 * 86400e3;
+        // 已有短周期结果、仍等 1W/1M → 保留约 45 天（覆盖 22 交易日 + 节假日缓冲）
+        return age < 45 * 86400e3;
+    });
     if (kept.length !== arr.length) {
         s.records[key] = kept;
         save();

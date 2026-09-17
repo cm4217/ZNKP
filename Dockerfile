@@ -17,7 +17,8 @@ ENV PORT=3000
 
 EXPOSE 3000
 
+# 用 node 自身做健康检查，避免依赖 alpine 是否自带 wget
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+  CMD node -e "require('http').get('http://127.0.0.1:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 CMD ["node", "server/server.js"]

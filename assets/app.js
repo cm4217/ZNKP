@@ -237,7 +237,8 @@
 
         function fetchBackendIndexKline(code, period) {
             if (!backendEnabled) return Promise.reject(new Error('Backend not available'));
-            return apiFetch(backendBaseUrl + '/api/indices/' + code + '/kline?period=' + period)
+            // 代码走查询参数，避免沪市 .SH 触发边缘 WAF 对路径的拦截（与预测接口一致）
+            return apiFetch(backendBaseUrl + '/api/indices/kline?code=' + encodeURIComponent(code) + '&period=' + encodeURIComponent(period))
                 .then(function(res) {
                     if (res.success && res.data) return res.data;
                     throw new Error('Backend error');

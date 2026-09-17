@@ -24,9 +24,14 @@ class Cache {
     }
 
     // 异步获取，带缓存；并发miss共享同一fetch
+    // 注意：合法缓存值可能是 null（如基金数据获取失败），不能用 get()!==null 判断命中，
+    // 否则会对 null 结果反复打上游。
     async getOrFetch(key, ttlSeconds, fetchFn) {
-        const cached = this.get(key);
-        if (cached !== null) return cached;
+        const entry = this.store.get(key);
+        if (entry) {
+            if (Date.now() <= entry.expireAt) return entry.data;
+            this.store.delete(key);
+        }
 
         if (this.pending.has(key)) {
             return this.pending.get(key).promise;

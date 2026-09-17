@@ -50,7 +50,7 @@
 docker build -t market-dashboard .
 docker run -d --name market-dashboard \
   -p 80:3000 \
-  -v /opt/market-data:/app/server/data \
+  -v /opt/market-data/accuracy-store.json:/app/server/accuracy-store.json \
   --restart unless-stopped \
   market-dashboard
 ```

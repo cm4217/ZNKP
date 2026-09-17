@@ -723,7 +723,7 @@ async function predict(code, type = 'index', opts = {}) {
         groups[f.group].items.push({ name: f.name, score: +f.score.toFixed(0), detail: f.detail });
     });
     Object.keys(groups).forEach(g => {
-        groups[g].score = Math.round(groups[g].score / groups[g].weight);
+        groups[g].score = groups[g].weight > 0 ? Math.round(groups[g].score / groups[g].weight) : 0;
     });
 
     return {

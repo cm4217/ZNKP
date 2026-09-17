@@ -132,9 +132,14 @@ app.get('/api/indices', async (req, res) => {
 });
 
 // 单个指数K线
-app.get('/api/indices/:code/kline', validatePeriod, async (req, res) => {
+// 与预测接口相同：沪市 .SH 会被部分边缘 WAF 误判为脚本扩展名而拦截路径参数，
+// 因此同时提供查询参数写法 /api/indices/kline?code=000001.SH&period=1M（前端优先）。
+async function handleIndexKline(req, res) {
     try {
-        const code = req.params.code;
+        const code = req.params.code || req.query.code;
+        if (!code) {
+            return res.status(400).json({ success: false, error: '缺少 code 参数' });
+        }
         if (!ds.INDEX_CONFIG[code]) {
             return res.status(400).json({ success: false, error: `未知的指数代码: ${code}` });
         }
@@ -149,7 +154,9 @@ app.get('/api/indices/:code/kline', validatePeriod, async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
-});
+}
+app.get('/api/indices/kline', validatePeriod, handleIndexKline);
+app.get('/api/indices/:code/kline', validatePeriod, handleIndexKline);
 
 // ========== 数字货币 ==========
 
@@ -253,11 +260,13 @@ app.get('/api/news', async (req, res) => {
 // 因此前端统一改用查询参数 /api/prediction?code=000001.SH&type=index 规避。
 async function handlePrediction(req, res) {
     try {
-        const code = req.params.code || req.query.code;
+        let code = req.params.code || req.query.code;
         if (!code) {
             return res.status(400).json({ success: false, error: '缺少 code 参数' });
         }
         const type = ['index', 'crypto', 'gold', 'fund'].includes(req.query.type) ? req.query.type : 'index';
+        // 加密币种统一大写，避免 ?code=btc 被正则拒掉
+        if (type === 'crypto') code = String(code).toUpperCase();
         if (type === 'index' && !ds.INDEX_CONFIG[code]) {
             return res.status(400).json({ success: false, error: `未知的指数代码: ${code}` });
         }
@@ -366,7 +375,12 @@ app.get('/api/briefing', async (req, res) => {
 // 默认 token 仅供个人使用，正式外网部署请通过 BACKFILL_TOKEN 环境变量覆盖。
 app.post('/api/admin/backfill', async (req, res) => {
     const token = req.query.token || (req.body && req.body.token);
-    const expected = process.env.BACKFILL_TOKEN || 'zhitou-backfill-2026';
+    // 生产环境必须显式配置 BACKFILL_TOKEN，避免默认口令被扫到；本地开发保留兜底便于自测
+    const expected = process.env.BACKFILL_TOKEN
+        || (process.env.NODE_ENV === 'production' ? null : 'zhitou-backfill-2026');
+    if (!expected) {
+        return res.status(503).json({ success: false, error: 'BACKFILL_TOKEN not configured' });
+    }
     if (token !== expected) {
         return res.status(401).json({ success: false, error: 'unauthorized' });
     }
